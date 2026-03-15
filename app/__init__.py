@@ -62,4 +62,17 @@ def create_app():
     def health():
         return {'status': 'ok', 'message': 'Spesho API running'}
 
+    with app.app_context():
+        db.create_all()
+        _seed_admin()
+
     return app
+
+
+def _seed_admin():
+    from app.models.user import User
+    if not User.query.filter_by(username='admin').first():
+        admin = User(username='admin', role='manager', full_name='System Admin')
+        admin.set_password('admin123')
+        db.session.add(admin)
+        db.session.commit()
