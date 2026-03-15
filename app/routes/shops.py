@@ -77,6 +77,13 @@ def update_shop(shop_id):
         shop.address = (data.get('address') or '').strip() or None
     if 'is_active' in data and user.is_super_admin:
         shop.is_active = bool(data['is_active'])
+    if 'owner_id' in data and user.is_super_admin:
+        owner_id = data['owner_id']
+        if owner_id is not None:
+            manager = User.query.get(owner_id)
+            if not manager or not manager.is_manager:
+                return jsonify({'error': 'Selected user is not a manager'}), 400
+        shop.owner_id = owner_id
     db.session.commit()
     return jsonify({'shop': shop.to_dict()}), 200
 
