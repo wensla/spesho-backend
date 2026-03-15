@@ -17,12 +17,20 @@ def list_users():
     if current.is_super_admin:
         users = User.query.all()
     else:
-        # Manager sees users in their shop(s)
-        shop_ids = current.get_shop_ids()
+        # Manager sees themselves + users in their owned shops
+        from app.models.shop import Shop
+        from app.models.user import _user_shops
+        manager_shop_ids = current.get_shop_ids()
         seen = {current.id}
         users = [current]
-        for shop in current.shops.all():
-            for u in shop.users.all():
+        if manager_shop_ids:
+            shop_users = (
+                User.query
+                .join(_user_shops, User.id == _user_shops.c.user_id)
+                .filter(_user_shops.c.shop_id.in_(manager_shop_ids))
+                .all()
+            )
+            for u in shop_users:
                 if u.id not in seen:
                     seen.add(u.id)
                     users.append(u)
@@ -70,7 +78,8 @@ def create_user():
 
     # Auto-assign to shop(s)
     shop_ids = data.get('shop_ids') or []
-    if not shop_ids and not current.is_super_admin:
+    if not shop_ids and current.is_manager:
+        # Auto-assign seller to manager's owned shops
         shop_ids = current.get_shop_ids()
     for sid in shop_ids:
         shop = Shop.query.get(sid)

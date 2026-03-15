@@ -77,6 +77,14 @@ def _run_migrations():
     from sqlalchemy import text, inspect
     inspector = inspect(db.engine)
 
+    # ── shops: add owner_id ───────────────────────────────────────────────────
+    if 'shops' in inspector.get_table_names():
+        sh_cols = [c['name'] for c in inspector.get_columns('shops')]
+        with db.engine.connect() as conn:
+            if 'owner_id' not in sh_cols:
+                conn.execute(text('ALTER TABLE shops ADD COLUMN owner_id INTEGER REFERENCES users(id)'))
+                conn.commit()
+
     # ── products ──────────────────────────────────────────────────────────────
     cols = [c['name'] for c in inspector.get_columns('products')]
     with db.engine.connect() as conn:

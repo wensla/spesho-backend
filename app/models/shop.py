@@ -11,6 +11,9 @@ class Shop(db.Model):
     address = db.Column(db.String(255), nullable=True)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Manager who owns this shop (nullable for legacy data / super_admin-created shops)
+    owner_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    owner = db.relationship('User', foreign_keys=[owner_id], backref='owned_shops')
 
     def to_dict(self):
         return {
@@ -20,4 +23,6 @@ class Shop(db.Model):
             'address': self.address,
             'is_active': self.is_active,
             'created_at': self.created_at.isoformat(),
+            'owner_id': self.owner_id,
+            'owner_name': self.owner.full_name if self.owner else None,
         }

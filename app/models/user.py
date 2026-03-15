@@ -57,14 +57,19 @@ class User(db.Model):
         return self.effective_role == 'seller'
 
     def get_shop_ids(self):
-        """Return list of shop IDs this user belongs to. Super admins get all."""
+        """Return list of active shop IDs accessible to this user."""
         if self.is_super_admin:
             from app.models.shop import Shop
             return [s.id for s in Shop.query.filter_by(is_active=True).all()]
-        return [s.id for s in self.shops.all()]
+        if self.is_manager:
+            # Manager sees only shops they own
+            from app.models.shop import Shop
+            return [s.id for s in Shop.query.filter_by(owner_id=self.id, is_active=True).all()]
+        # Seller sees only assigned shops
+        return [s.id for s in self.shops.filter_by(is_active=True).all()]
 
     def to_dict(self):
-        shop_ids = [] if self.is_super_admin else [s.id for s in self.shops.all()]
+        shop_ids = [] if self.is_super_admin else self.get_shop_ids()
         return {
             'id': self.id,
             'username': self.username,
