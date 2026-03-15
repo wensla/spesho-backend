@@ -1,11 +1,9 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import get_jwt_identity
 from datetime import datetime, date
 from app import db
 from app.models.product import Product
 from app.models.stock_movement import StockMovement
-from app.middleware.auth import manager_required, login_required
-from sqlalchemy import func
+from app.middleware.auth import manager_required, login_required, get_current_user
 
 stock_bp = Blueprint('stock', __name__)
 
@@ -13,6 +11,7 @@ stock_bp = Blueprint('stock', __name__)
 @stock_bp.route('/in', methods=['POST'])
 @manager_required
 def stock_in():
+    user = get_current_user()
     data = request.get_json()
     required = ['product_id', 'quantity', 'unit_price']
     for field in required:
@@ -31,17 +30,25 @@ def stock_in():
     if unit_price <= 0:
         return jsonify({'error': 'unit_price must be greater than zero'}), 400
 
+    # Resolve shop_id
+    shop_ids = user.get_shop_ids()
+    shop_id = data.get('shop_id')
+    if not user.is_super_admin:
+        if not shop_ids:
+            return jsonify({'error': 'You are not assigned to any shop'}), 403
+        shop_id = shop_id if shop_id in shop_ids else shop_ids[0]
+
     movement_date = date.fromisoformat(data['date']) if data.get('date') else date.today()
-    user_id = int(get_jwt_identity())
 
     movement = StockMovement(
+        shop_id=shop_id,
         product_id=data['product_id'],
         quantity_in=quantity,
         quantity_out=0,
         unit_price=unit_price,
         note=data.get('note', ''),
         movement_type='in',
-        created_by=user_id,
+        created_by=user.id,
         date=movement_date,
     )
     db.session.add(movement)
@@ -50,20 +57,36 @@ def stock_in():
     return jsonify({
         'message': 'Stock added successfully',
         'movement': movement.to_dict(),
-        'new_balance': product.current_stock(),
+        'new_balance': product.current_stock(shop_id=shop_id),
     }), 201
 
 
 @stock_bp.route('/balance', methods=['GET'])
 @login_required
 def stock_balance():
-    from app.models.product import Product as P
-    products = P.query.filter_by(is_active=True).order_by(P.name).all()
+    user = get_current_user()
+    shop_id = request.args.get('shop_id', type=int)
+
+    query = Product.query.filter_by(is_active=True)
+    if not user.is_super_admin:
+        accessible = user.get_shop_ids()
+        if shop_id and shop_id in accessible:
+            query = query.filter_by(shop_id=shop_id)
+        elif accessible:
+            query = query.filter(
+                (Product.shop_id.in_(accessible)) | (Product.shop_id.is_(None))
+            )
+        active_shop_id = shop_id if (shop_id and shop_id in accessible) else (accessible[0] if accessible else None)
+    else:
+        active_shop_id = shop_id
+
+    products = query.order_by(Product.name).all()
     balances = []
     for p in products:
-        stock = p.current_stock()
+        stock = p.current_stock(shop_id=active_shop_id)
         balances.append({
             'product_id': p.id,
+            'shop_id': p.shop_id,
             'product_name': p.name,
             'unit_price': float(p.unit_price),
             'unit': p.unit,
@@ -76,14 +99,23 @@ def stock_balance():
 @stock_bp.route('/movements', methods=['GET'])
 @login_required
 def stock_movements():
+    user = get_current_user()
     product_id = request.args.get('product_id', type=int)
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     movement_type = request.args.get('type')
+    shop_id = request.args.get('shop_id', type=int)
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
 
     query = StockMovement.query
+
+    if not user.is_super_admin:
+        accessible = user.get_shop_ids()
+        if shop_id and shop_id in accessible:
+            query = query.filter_by(shop_id=shop_id)
+        elif accessible:
+            query = query.filter(StockMovement.shop_id.in_(accessible))
 
     if product_id:
         query = query.filter_by(product_id=product_id)

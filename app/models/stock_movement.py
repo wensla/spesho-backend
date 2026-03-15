@@ -6,6 +6,7 @@ class StockMovement(db.Model):
     __tablename__ = 'stock_movements'
 
     id = db.Column(db.Integer, primary_key=True)
+    shop_id = db.Column(db.Integer, db.ForeignKey('shops.id'), nullable=True, index=True)
     product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False, index=True)
     quantity_in = db.Column(db.Numeric(12, 2), default=0)
     quantity_out = db.Column(db.Numeric(12, 2), default=0)
@@ -16,9 +17,13 @@ class StockMovement(db.Model):
     date = db.Column(db.Date, default=datetime.utcnow, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    shop = db.relationship('Shop', foreign_keys=[shop_id])
+
     def to_dict(self):
         return {
             'id': self.id,
+            'shop_id': self.shop_id,
+            'shop_name': self.shop.name if self.shop else None,
             'product_id': self.product_id,
             'product_name': self.product.name if self.product else None,
             'quantity_in': float(self.quantity_in or 0),

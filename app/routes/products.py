@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from app import db
 from app.models.product import Product
-from app.middleware.auth import manager_required, login_required
+from app.middleware.auth import manager_required, login_required, get_current_user
 
 products_bp = Blueprint('products', __name__)
 
@@ -23,21 +23,42 @@ def _check_category_name(name, category):
 @products_bp.route('/', methods=['GET'])
 @login_required
 def list_products():
+    user = get_current_user()
     include_stock = request.args.get('include_stock', 'false').lower() == 'true'
-    products = Product.query.filter_by(is_active=True).order_by(Product.name).all()
-    return jsonify({'products': [p.to_dict(include_stock=include_stock) for p in products]}), 200
+    shop_id = request.args.get('shop_id', type=int)
+
+    query = Product.query.filter_by(is_active=True)
+
+    if not user.is_super_admin:
+        accessible = user.get_shop_ids()
+        if shop_id and shop_id in accessible:
+            query = query.filter_by(shop_id=shop_id)
+        elif accessible:
+            # Show products from accessible shops AND global products (shop_id IS NULL)
+            query = query.filter(
+                (Product.shop_id.in_(accessible)) | (Product.shop_id.is_(None))
+            )
+    elif shop_id:
+        query = query.filter_by(shop_id=shop_id)
+
+    products = query.order_by(Product.name).all()
+    active_shop_id = shop_id or (user.get_shop_ids()[0] if not user.is_super_admin and user.get_shop_ids() else None)
+    return jsonify({'products': [p.to_dict(include_stock=include_stock, shop_id=active_shop_id) for p in products]}), 200
 
 
 @products_bp.route('/<int:product_id>', methods=['GET'])
 @login_required
 def get_product(product_id):
+    user = get_current_user()
     product = Product.query.get_or_404(product_id)
-    return jsonify({'product': product.to_dict(include_stock=True)}), 200
+    shop_id = product.shop_id or (user.get_shop_ids()[0] if user.get_shop_ids() else None)
+    return jsonify({'product': product.to_dict(include_stock=True, shop_id=shop_id)}), 200
 
 
 @products_bp.route('/', methods=['POST'])
 @manager_required
 def create_product():
+    user = get_current_user()
     data = request.get_json()
     name = (data.get('name') or '').strip()
     if not name:
@@ -58,11 +79,18 @@ def create_product():
     if cat_err:
         return jsonify({'error': cat_err}), 400
 
-    existing = Product.query.filter_by(name=name).first()
+    # Determine shop_id
+    shop_id = data.get('shop_id')
+    if not user.is_super_admin:
+        shop_ids = user.get_shop_ids()
+        if not shop_ids:
+            return jsonify({'error': 'You are not assigned to any shop'}), 403
+        shop_id = shop_id if shop_id in shop_ids else shop_ids[0]
+
+    existing = Product.query.filter_by(name=name, shop_id=shop_id).first()
     if existing and existing.is_active:
         return jsonify({'error': 'Product name already exists'}), 409
     if existing and not existing.is_active:
-        # Reactivate deleted product with new values
         existing.unit_price = unit_price
         existing.is_active = True
         package_size = data.get('package_size', 5)
@@ -72,14 +100,14 @@ def create_product():
         return jsonify({'product': existing.to_dict()}), 201
 
     unit = (data.get('unit') or 'kg').strip()
-    # mchele and maharage are always 1kg
     if category in ('mchele', 'maharage'):
         package_size = 1
     else:
         package_size = data.get('package_size', 5)
         if package_size not in (5, 10, 25):
             package_size = 5
-    product = Product(name=name, unit_price=unit_price, unit=unit, package_size=package_size, category=category)
+    product = Product(shop_id=shop_id, name=name, unit_price=unit_price, unit=unit,
+                      package_size=package_size, category=category)
     db.session.add(product)
     db.session.commit()
     return jsonify({'product': product.to_dict()}), 201
@@ -88,7 +116,12 @@ def create_product():
 @products_bp.route('/<int:product_id>', methods=['PUT'])
 @manager_required
 def update_product(product_id):
+    user = get_current_user()
     product = Product.query.get_or_404(product_id)
+
+    if not user.is_super_admin and product.shop_id not in user.get_shop_ids():
+        return jsonify({'error': 'Access denied'}), 403
+
     data = request.get_json()
     if 'name' in data:
         name = (data.get('name') or '').strip()
@@ -121,10 +154,10 @@ def update_product(product_id):
         package_size = data.get('package_size')
         if package_size in (5, 10, 25):
             product.package_size = package_size
-    # Check name uniqueness (exclude self)
     if 'name' in data:
         conflict = Product.query.filter(
             Product.name == product.name,
+            Product.shop_id == product.shop_id,
             Product.id != product_id,
             Product.is_active == True
         ).first()
@@ -137,7 +170,10 @@ def update_product(product_id):
 @products_bp.route('/<int:product_id>', methods=['DELETE'])
 @manager_required
 def delete_product(product_id):
+    user = get_current_user()
     product = Product.query.get_or_404(product_id)
+    if not user.is_super_admin and product.shop_id not in user.get_shop_ids():
+        return jsonify({'error': 'Access denied'}), 403
     product.is_active = False
     db.session.commit()
     return jsonify({'message': 'Product deleted'}), 200

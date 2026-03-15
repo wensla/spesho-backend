@@ -36,7 +36,8 @@ def create_app():
     migrate.init_app(app, db)
     CORS(app)
 
-    from app.models import user, product, stock_movement, sale, debt, daily_sale  # noqa: F401
+    # Import all models so SQLAlchemy knows about them
+    from app.models import user, shop, user_shop, product, stock_movement, sale, debt, daily_sale  # noqa: F401
 
     from app.routes.auth import auth_bp
     from app.routes.products import products_bp
@@ -46,6 +47,8 @@ def create_app():
     from app.routes.reports import reports_bp
     from app.routes.users import users_bp
     from app.routes.daily_sales import daily_sales_bp
+    from app.routes.shops import shops_bp
+    from app.routes.debts import debts_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(products_bp, url_prefix='/api/products')
@@ -54,9 +57,9 @@ def create_app():
     app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
     app.register_blueprint(reports_bp, url_prefix='/api/reports')
     app.register_blueprint(users_bp, url_prefix='/api/users')
-    from app.routes.debts import debts_bp
-    app.register_blueprint(debts_bp, url_prefix='/api/debts')
     app.register_blueprint(daily_sales_bp, url_prefix='/api/daily-sales')
+    app.register_blueprint(shops_bp, url_prefix='/api/shops')
+    app.register_blueprint(debts_bp, url_prefix='/api/debts')
 
     @app.route('/api/health')
     def health():
@@ -65,7 +68,7 @@ def create_app():
     with app.app_context():
         db.create_all()
         _run_migrations()
-        _seed_admin()
+        _seed_default_shop_and_admin()
 
     return app
 
@@ -73,22 +76,110 @@ def create_app():
 def _run_migrations():
     from sqlalchemy import text, inspect
     inspector = inspect(db.engine)
+
+    # ── products ──────────────────────────────────────────────────────────────
+    cols = [c['name'] for c in inspector.get_columns('products')]
     with db.engine.connect() as conn:
-        # Add package_size column if missing
-        cols = [c['name'] for c in inspector.get_columns('products')]
         if 'package_size' not in cols:
             conn.execute(text('ALTER TABLE products ADD COLUMN package_size INTEGER NOT NULL DEFAULT 5'))
             conn.commit()
-        # Add category column if missing
         if 'category' not in cols:
             conn.execute(text("ALTER TABLE products ADD COLUMN category VARCHAR(20) NOT NULL DEFAULT 'unga'"))
             conn.commit()
+        if 'shop_id' not in cols:
+            conn.execute(text('ALTER TABLE products ADD COLUMN shop_id INTEGER REFERENCES shops(id)'))
+            conn.commit()
+
+    # ── daily_sales ───────────────────────────────────────────────────────────
+    if 'daily_sales' in inspector.get_table_names():
+        ds_cols = [c['name'] for c in inspector.get_columns('daily_sales')]
+        with db.engine.connect() as conn:
+            if 'shop_id' not in ds_cols:
+                conn.execute(text('ALTER TABLE daily_sales ADD COLUMN shop_id INTEGER REFERENCES shops(id)'))
+                conn.commit()
+            if 'payment_method' not in ds_cols:
+                conn.execute(text("ALTER TABLE daily_sales ADD COLUMN payment_method VARCHAR(20) NOT NULL DEFAULT 'cash'"))
+                conn.commit()
+
+    # ── sales ─────────────────────────────────────────────────────────────────
+    if 'sales' in inspector.get_table_names():
+        s_cols = [c['name'] for c in inspector.get_columns('sales')]
+        with db.engine.connect() as conn:
+            if 'shop_id' not in s_cols:
+                conn.execute(text('ALTER TABLE sales ADD COLUMN shop_id INTEGER REFERENCES shops(id)'))
+                conn.commit()
+            if 'payment_method' not in s_cols:
+                conn.execute(text("ALTER TABLE sales ADD COLUMN payment_method VARCHAR(20) NOT NULL DEFAULT 'cash'"))
+                conn.commit()
+
+    # ── stock_movements ───────────────────────────────────────────────────────
+    if 'stock_movements' in inspector.get_table_names():
+        sm_cols = [c['name'] for c in inspector.get_columns('stock_movements')]
+        with db.engine.connect() as conn:
+            if 'shop_id' not in sm_cols:
+                conn.execute(text('ALTER TABLE stock_movements ADD COLUMN shop_id INTEGER REFERENCES shops(id)'))
+                conn.commit()
+
+    # ── users: normalise legacy 'salesperson' role ────────────────────────────
+    # Drop old check constraint (if any) before updating the role value
+    with db.engine.connect() as conn:
+        conn.execute(text("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'users_role_check'
+                ) THEN
+                    ALTER TABLE users DROP CONSTRAINT users_role_check;
+                END IF;
+            END$$
+        """))
+        conn.commit()
+        conn.execute(text("UPDATE users SET role = 'seller' WHERE role = 'salesperson'"))
+        conn.commit()
+        # Add updated check constraint
+        conn.execute(text("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'users_role_check_v2'
+                ) THEN
+                    ALTER TABLE users ADD CONSTRAINT users_role_check_v2
+                        CHECK (role IN ('super_admin', 'manager', 'seller'));
+                END IF;
+            END$$
+        """))
+        conn.commit()
 
 
-def _seed_admin():
+def _seed_default_shop_and_admin():
+    from app.models.shop import Shop
     from app.models.user import User
-    if not User.query.filter_by(username='admin').first():
-        admin = User(username='admin', role='manager', full_name='System Admin')
+
+    # Create default shop if none exist
+    if not Shop.query.first():
+        default_shop = Shop(name='Duka Kuu', location='Headquarters', address='')
+        db.session.add(default_shop)
+        db.session.commit()
+
+    default_shop = Shop.query.first()
+
+    # Create / update super admin
+    admin = User.query.filter_by(username='admin').first()
+    if not admin:
+        admin = User(username='admin', role='super_admin', full_name='System Admin')
         admin.set_password('admin123')
         db.session.add(admin)
         db.session.commit()
+    else:
+        # Upgrade existing admin to super_admin
+        if admin.role in ('manager', 'salesperson', 'seller'):
+            admin.role = 'super_admin'
+            db.session.commit()
+
+    # Assign all existing users without a shop to the default shop
+    for user in User.query.all():
+        if not user.is_super_admin and user.shops.count() == 0:
+            user.shops.append(default_shop)
+    db.session.commit()
