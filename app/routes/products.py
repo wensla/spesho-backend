@@ -51,10 +51,17 @@ def create_product():
         return jsonify({'product': existing.to_dict()}), 201
 
     unit = (data.get('unit') or 'kg').strip()
-    package_size = data.get('package_size', 5)
-    if package_size not in (5, 10, 25):
-        package_size = 5
-    product = Product(name=name, unit_price=unit_price, unit=unit, package_size=package_size)
+    category = (data.get('category') or 'unga').strip()
+    if category not in ('unga', 'mchele', 'maharage'):
+        category = 'unga'
+    # mchele and maharage are always 1kg
+    if category in ('mchele', 'maharage'):
+        package_size = 1
+    else:
+        package_size = data.get('package_size', 5)
+        if package_size not in (5, 10, 25):
+            package_size = 5
+    product = Product(name=name, unit_price=unit_price, unit=unit, package_size=package_size, category=category)
     db.session.add(product)
     db.session.commit()
     return jsonify({'product': product.to_dict()}), 201
@@ -82,7 +89,13 @@ def update_product(product_id):
         unit = (data.get('unit') or 'kg').strip()
         if unit:
             product.unit = unit
-    if 'package_size' in data:
+    if 'category' in data:
+        category = (data.get('category') or 'unga').strip()
+        if category in ('unga', 'mchele', 'maharage'):
+            product.category = category
+            if category in ('mchele', 'maharage'):
+                product.package_size = 1
+    if 'package_size' in data and product.category == 'unga':
         package_size = data.get('package_size')
         if package_size in (5, 10, 25):
             product.package_size = package_size
