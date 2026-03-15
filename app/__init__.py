@@ -64,9 +64,25 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        _run_migrations()
         _seed_admin()
 
     return app
+
+
+def _run_migrations():
+    from sqlalchemy import text, inspect
+    inspector = inspect(db.engine)
+    with db.engine.connect() as conn:
+        # Add package_size column if missing
+        cols = [c['name'] for c in inspector.get_columns('products')]
+        if 'package_size' not in cols:
+            conn.execute(text('ALTER TABLE products ADD COLUMN package_size INTEGER NOT NULL DEFAULT 5'))
+            conn.commit()
+        # Add category column if missing
+        if 'category' not in cols:
+            conn.execute(text("ALTER TABLE products ADD COLUMN category VARCHAR(20) NOT NULL DEFAULT 'unga'"))
+            conn.commit()
 
 
 def _seed_admin():
