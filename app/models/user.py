@@ -20,6 +20,7 @@ class User(db.Model):
     # Legacy 'salesperson' is treated as 'seller' everywhere
     role = db.Column(db.String(20), nullable=False, default='seller')
     full_name = db.Column(db.String(120), nullable=True)
+    gender = db.Column(db.String(10), nullable=True)  # 'male' | 'female' | None
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -75,6 +76,7 @@ class User(db.Model):
             'username': self.username,
             'role': self.effective_role,
             'full_name': self.full_name,
+            'gender': self.gender,
             'is_active': self.is_active,
             'shop_ids': shop_ids,
             'created_at': self.created_at.isoformat(),

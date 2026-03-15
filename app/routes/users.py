@@ -68,10 +68,14 @@ def create_user():
     if User.query.filter_by(username=username).first():
         return jsonify({'error': 'Username already exists'}), 409
 
+    gender = data.get('gender')
+    if gender not in ('male', 'female', None):
+        gender = None
     user = User(
         username=username,
         role=role,
         full_name=data.get('full_name', ''),
+        gender=gender,
     )
     user.set_password(password)
     db.session.add(user)
@@ -99,6 +103,9 @@ def update_user(user_id):
 
     if 'full_name' in data:
         user.full_name = data['full_name']
+    if 'gender' in data:
+        g = data['gender']
+        user.gender = g if g in ('male', 'female') else None
     if 'role' in data:
         role = data['role']
         if role == 'salesperson':

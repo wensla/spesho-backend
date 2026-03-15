@@ -77,6 +77,13 @@ def _run_migrations():
     from sqlalchemy import text, inspect
     inspector = inspect(db.engine)
 
+    # ── users: add gender ─────────────────────────────────────────────────────
+    u_cols = [c['name'] for c in inspector.get_columns('users')]
+    with db.engine.connect() as conn:
+        if 'gender' not in u_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN gender VARCHAR(10)"))
+            conn.commit()
+
     # ── shops: add owner_id ───────────────────────────────────────────────────
     if 'shops' in inspector.get_table_names():
         sh_cols = [c['name'] for c in inspector.get_columns('shops')]
