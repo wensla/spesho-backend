@@ -162,18 +162,9 @@ def _run_migrations():
 
 
 def _seed_default_shop_and_admin():
-    from app.models.shop import Shop
     from app.models.user import User
 
-    # Create default shop if none exist
-    if not Shop.query.first():
-        default_shop = Shop(name='Duka Kuu', location='Headquarters', address='')
-        db.session.add(default_shop)
-        db.session.commit()
-
-    default_shop = Shop.query.first()
-
-    # Create / update super admin
+    # Super Admin = system owner, no shop assignment
     admin = User.query.filter_by(username='admin').first()
     if not admin:
         admin = User(username='admin', role='super_admin', full_name='System Admin')
@@ -181,13 +172,6 @@ def _seed_default_shop_and_admin():
         db.session.add(admin)
         db.session.commit()
     else:
-        # Upgrade existing admin to super_admin
         if admin.role in ('manager', 'salesperson', 'seller'):
             admin.role = 'super_admin'
             db.session.commit()
-
-    # Assign all existing users without a shop to the default shop
-    for user in User.query.all():
-        if not user.is_super_admin and user.shops.count() == 0:
-            user.shops.append(default_shop)
-    db.session.commit()
