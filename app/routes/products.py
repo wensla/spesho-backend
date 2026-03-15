@@ -5,6 +5,20 @@ from app.middleware.auth import manager_required, login_required
 
 products_bp = Blueprint('products', __name__)
 
+_UNGA_WORDS     = ['dona', 'sembe', 'ngano', 'mtama', 'muhogo', 'unga']
+_MCHELE_WORDS   = ['mchele']
+_MAHARAGE_WORDS = ['maharage']
+
+def _check_category_name(name, category):
+    n = name.lower()
+    has_unga     = any(w in n for w in _UNGA_WORDS)
+    has_mchele   = any(w in n for w in _MCHELE_WORDS)
+    has_maharage = any(w in n for w in _MAHARAGE_WORDS)
+    if category == 'unga'     and (has_mchele or has_maharage): return 'Sii jamii ya hapa'
+    if category == 'mchele'   and (has_unga   or has_maharage): return 'Sii jamii ya hapa'
+    if category == 'maharage' and (has_unga   or has_mchele):   return 'Sii jamii ya hapa'
+    return None
+
 
 @products_bp.route('/', methods=['GET'])
 @login_required
@@ -37,6 +51,13 @@ def create_product():
     if unit_price <= 0:
         return jsonify({'error': 'unit_price must be greater than zero'}), 400
 
+    category = (data.get('category') or 'unga').strip()
+    if category not in ('unga', 'mchele', 'maharage'):
+        category = 'unga'
+    cat_err = _check_category_name(name, category)
+    if cat_err:
+        return jsonify({'error': cat_err}), 400
+
     existing = Product.query.filter_by(name=name).first()
     if existing and existing.is_active:
         return jsonify({'error': 'Product name already exists'}), 409
@@ -51,9 +72,6 @@ def create_product():
         return jsonify({'product': existing.to_dict()}), 201
 
     unit = (data.get('unit') or 'kg').strip()
-    category = (data.get('category') or 'unga').strip()
-    if category not in ('unga', 'mchele', 'maharage'):
-        category = 'unga'
     # mchele and maharage are always 1kg
     if category in ('mchele', 'maharage'):
         package_size = 1
@@ -92,6 +110,10 @@ def update_product(product_id):
     if 'category' in data:
         category = (data.get('category') or 'unga').strip()
         if category in ('unga', 'mchele', 'maharage'):
+            check_name = data.get('name', product.name).strip()
+            cat_err = _check_category_name(check_name, category)
+            if cat_err:
+                return jsonify({'error': cat_err}), 400
             product.category = category
             if category in ('mchele', 'maharage'):
                 product.package_size = 1
