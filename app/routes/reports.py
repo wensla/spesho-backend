@@ -19,6 +19,47 @@ def _parse_dates():
     return sd, ed
 
 
+@reports_bp.route('/sales-summary', methods=['GET'])
+@login_required
+def sales_summary():
+    sd, ed = _parse_dates()
+    if not sd or not ed:
+        return jsonify({'error': 'start_date and end_date required'}), 400
+
+    # Group sales by date within range
+    daily = db.session.query(
+        Sale.date,
+        func.sum(Sale.total).label('total'),
+        func.sum(Sale.paid).label('cash_paid'),
+        func.sum(Sale.debt).label('debt'),
+        func.count(Sale.id).label('entries'),
+    ).filter(Sale.date >= sd, Sale.date <= ed).group_by(Sale.date).order_by(Sale.date).all()
+
+    days = [
+        {
+            'date': row.date.isoformat(),
+            'total': float(row.total or 0),
+            'cash_paid': float(row.cash_paid or 0),
+            'debt': float(row.debt or 0),
+            'entries': row.entries or 0,
+        }
+        for row in daily
+    ]
+
+    grand_total = sum(d['total'] for d in days)
+    grand_cash  = sum(d['cash_paid'] for d in days)
+    grand_debt  = sum(d['debt'] for d in days)
+
+    return jsonify({
+        'start_date': sd.isoformat(),
+        'end_date': ed.isoformat(),
+        'days': days,
+        'grand_total': grand_total,
+        'grand_cash': grand_cash,
+        'grand_debt': grand_debt,
+    }), 200
+
+
 @reports_bp.route('/daily', methods=['GET'])
 @manager_required
 def daily_report():
