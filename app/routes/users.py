@@ -15,25 +15,24 @@ _VALID_ROLES = ('super_admin', 'manager', 'seller', 'salesperson')
 def list_users():
     current = get_current_user()
     if current.is_super_admin:
-        users = User.query.all()
+        # Super admin sees managers only
+        users = User.query.filter_by(role='manager').order_by(User.full_name).all()
     else:
-        # Manager sees themselves + users in their owned shops
-        from app.models.shop import Shop
+        # Manager sees only sellers assigned to their shops
         from app.models.user import _user_shops
         manager_shop_ids = current.get_shop_ids()
-        seen = {current.id}
-        users = [current]
         if manager_shop_ids:
-            shop_users = (
+            users = (
                 User.query
+                .filter(User.role.in_(['seller', 'salesperson']))
                 .join(_user_shops, User.id == _user_shops.c.user_id)
                 .filter(_user_shops.c.shop_id.in_(manager_shop_ids))
+                .distinct()
+                .order_by(User.full_name)
                 .all()
             )
-            for u in shop_users:
-                if u.id not in seen:
-                    seen.add(u.id)
-                    users.append(u)
+        else:
+            users = []
     return jsonify({'users': [u.to_dict() for u in users]}), 200
 
 

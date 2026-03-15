@@ -71,6 +71,14 @@ class User(db.Model):
 
     def to_dict(self):
         shop_ids = [] if self.is_super_admin else self.get_shop_ids()
+        # For sellers, include first assigned shop's name and location for display
+        shop_name = None
+        shop_location = None
+        if self.is_seller:
+            first_shop = self.shops.first()
+            if first_shop:
+                shop_name = first_shop.name
+                shop_location = first_shop.location
         return {
             'id': self.id,
             'username': self.username,
@@ -79,5 +87,7 @@ class User(db.Model):
             'gender': self.gender,
             'is_active': self.is_active,
             'shop_ids': shop_ids,
+            'shop_name': shop_name,
+            'shop_location': shop_location,
             'created_at': self.created_at.isoformat(),
         }
