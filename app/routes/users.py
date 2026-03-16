@@ -15,13 +15,8 @@ _VALID_ROLES = ('super_admin', 'manager', 'seller', 'salesperson')
 def list_users():
     current = get_current_user()
     if current.is_super_admin:
-        # Super admin sees ALL users ordered by role priority
-        role_order = db.case(
-            (User.role == 'super_admin', 0),
-            (User.role == 'manager', 1),
-            else_=2
-        )
-        users = User.query.order_by(role_order, User.full_name).all()
+        # Super admin sees managers only
+        users = User.query.filter_by(role='manager').order_by(User.full_name).all()
     else:
         # Manager sees only sellers assigned to their shops
         from app.models.user import _user_shops
