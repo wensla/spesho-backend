@@ -3,22 +3,22 @@ from flask_jwt_extended import get_jwt_identity
 from app import db
 from app.models.user import User
 from app.models.shop import Shop
-from app.middleware.auth import manager_required, super_admin_required, login_required, get_current_user
+from app.middleware.auth import manager_required, super_admin_required, get_current_user
 
 users_bp = Blueprint('users', __name__)
 
-_VALID_ROLES = ('super_admin', 'manager', 'seller', 'salesperson')
 
-
+# ── GET /api/users/ ──────────────────────────────────────────────────────────
+# SRS 3.1: Super Admin sees Managers only
+# SRS 3.2: Manager sees their Sellers only
 @users_bp.route('/', methods=['GET'])
 @manager_required
 def list_users():
     current = get_current_user()
     if current.is_super_admin:
-        # Super admin sees managers only
         users = User.query.filter_by(role='manager').order_by(User.full_name).all()
     else:
-        # Manager sees all sellers they created (via manager_id)
+        # Manager sees sellers they registered (manager_id FK)
         users = (
             User.query
             .filter(User.role.in_(['seller', 'salesperson']))
@@ -29,33 +29,34 @@ def list_users():
     return jsonify({'users': [u.to_dict() for u in users]}), 200
 
 
+# ── POST /api/users/ ─────────────────────────────────────────────────────────
+# SRS 3.1: Super Admin registers Managers
+# SRS 3.2: Manager registers Sellers
 @users_bp.route('/', methods=['POST'])
 @manager_required
 def create_user():
     current = get_current_user()
     data = request.get_json()
-    required = ['username', 'password', 'role']
-    for field in required:
+
+    for field in ('username', 'password', 'role'):
         if not data.get(field):
             return jsonify({'error': f'{field} is required'}), 400
 
     username = data['username'].strip()
     if len(username) < 3:
         return jsonify({'error': 'username must be at least 3 characters'}), 400
-
-    password = data['password']
-    if len(password) < 6:
+    if len(data['password']) < 6:
         return jsonify({'error': 'password must be at least 6 characters'}), 400
 
     role = data['role']
-    # Normalise
     if role == 'salesperson':
         role = 'seller'
-    # Manager can only create seller; super_admin can create any role
-    if current.is_manager and role not in ('seller', 'salesperson'):
-        return jsonify({'error': 'Managers can only create Seller accounts'}), 403
-    if role not in ('super_admin', 'manager', 'seller'):
-        return jsonify({'error': 'Invalid role'}), 400
+
+    # Enforce SRS role rules
+    if current.is_super_admin and role != 'manager':
+        return jsonify({'error': 'Super Admin can only register Manager accounts'}), 403
+    if current.is_manager and role != 'seller':
+        return jsonify({'error': 'Managers can only register Seller accounts'}), 403
 
     if User.query.filter_by(username=username).first():
         return jsonify({'error': 'Username already exists'}), 409
@@ -63,30 +64,29 @@ def create_user():
     gender = data.get('gender')
     if gender not in ('male', 'female', None):
         gender = None
+
     user = User(
         username=username,
         role=role,
         full_name=data.get('full_name', ''),
         gender=gender,
-        manager_id=current.id if current.is_manager and role == 'seller' else None,
+        manager_id=current.id if current.is_manager else None,
     )
-    user.set_password(password)
+    user.set_password(data['password'])
     db.session.add(user)
 
-    # Auto-assign to shop(s)
-    shop_ids = data.get('shop_ids') or []
-    if not shop_ids and current.is_manager:
-        # Auto-assign seller to manager's owned shops
-        shop_ids = current.get_shop_ids()
-    for sid in shop_ids:
-        shop = Shop.query.get(sid)
-        if shop and (current.is_super_admin or sid in current.get_shop_ids()):
-            user.shops.append(shop)
+    # Auto-assign seller to manager's shops
+    if current.is_manager:
+        for sid in current.get_shop_ids():
+            shop = Shop.query.get(sid)
+            if shop:
+                user.shops.append(shop)
 
     db.session.commit()
     return jsonify({'user': user.to_dict()}), 201
 
 
+# ── PUT /api/users/<id> ───────────────────────────────────────────────────────
 @users_bp.route('/<int:user_id>', methods=['PUT'])
 @manager_required
 def update_user(user_id):
@@ -99,16 +99,6 @@ def update_user(user_id):
     if 'gender' in data:
         g = data['gender']
         user.gender = g if g in ('male', 'female') else None
-    if 'role' in data:
-        role = data['role']
-        if role == 'salesperson':
-            role = 'seller'
-        if current.is_super_admin and role in ('super_admin', 'manager', 'seller'):
-            user.role = role
-        elif current.is_manager and role in ('seller',):
-            user.role = role
-    if 'is_active' in data:
-        user.is_active = bool(data['is_active'])
     if 'password' in data and data['password']:
         if len(data['password']) < 6:
             return jsonify({'error': 'password must be at least 6 characters'}), 400
@@ -118,25 +108,8 @@ def update_user(user_id):
     return jsonify({'user': user.to_dict()}), 200
 
 
-@users_bp.route('/<int:user_id>', methods=['DELETE'])
-@manager_required
-def delete_user(user_id):
-    current = get_current_user()
-    current_id = int(get_jwt_identity())
-    if current_id == user_id:
-        return jsonify({'error': 'Cannot delete yourself'}), 400
-    user = User.query.get_or_404(user_id)
-    # Super admin can hard-delete any user
-    if current.is_super_admin:
-        db.session.delete(user)
-        db.session.commit()
-        return jsonify({'message': 'User deleted'}), 200
-    # Manager can only deactivate sellers in their shops
-    user.is_active = False
-    db.session.commit()
-    return jsonify({'message': 'User deactivated'}), 200
-
-
+# ── POST /api/users/<id>/toggle-active ───────────────────────────────────────
+# SRS 3.1: Super Admin Activate/Deactivate Accounts
 @users_bp.route('/<int:user_id>/toggle-active', methods=['POST'])
 @super_admin_required
 def toggle_active(user_id):
@@ -147,4 +120,24 @@ def toggle_active(user_id):
     user.is_active = not user.is_active
     db.session.commit()
     status = 'activated' if user.is_active else 'deactivated'
-    return jsonify({'message': f'User {status}', 'user': user.to_dict()}), 200
+    return jsonify({'message': f'Manager {status}', 'user': user.to_dict()}), 200
+
+
+# ── DELETE /api/users/<id> ────────────────────────────────────────────────────
+# SRS: Manager removes their Sellers
+@users_bp.route('/<int:user_id>', methods=['DELETE'])
+@manager_required
+def delete_user(user_id):
+    current = get_current_user()
+    current_id = int(get_jwt_identity())
+    if current_id == user_id:
+        return jsonify({'error': 'Cannot delete yourself'}), 400
+    user = User.query.get_or_404(user_id)
+    # Only manager can delete their own sellers
+    if current.is_manager:
+        if user.manager_id != current.id:
+            return jsonify({'error': 'Not your seller'}), 403
+        db.session.delete(user)
+        db.session.commit()
+        return jsonify({'message': 'Seller removed'}), 200
+    return jsonify({'error': 'Use toggle-active to deactivate managers'}), 403
