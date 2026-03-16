@@ -71,16 +71,34 @@ def dashboard():
         extract('year', DailySale.date) == year,
     ).with_entities(func.coalesce(func.sum(DailySale.debt), 0)).scalar()
 
-    # Debts
-    total_outstanding = db.session.query(
-        func.coalesce(func.sum(Debt.total_amount - Debt.amount_paid), 0)
-    ).filter(Debt.status != 'paid').scalar()
+    # Debts — scoped to accessible shops
+    def _debt_q():
+        q = db.session.query(Debt)
+        if user.is_seller:
+            return q.filter(Debt.seller_id == user.id)
+        accessible = user.get_shop_ids()
+        if shop_id and shop_id in accessible:
+            return q.filter(Debt.shop_id == shop_id)
+        if accessible:
+            return q.filter(Debt.shop_id.in_(accessible))
+        return q  # super admin with no shop filter → all
 
-    total_debtors = db.session.query(func.count(Debt.id)).filter(Debt.status != 'paid').scalar()
+    total_outstanding = _debt_q().filter(Debt.status != 'paid').with_entities(
+        func.coalesce(func.sum(Debt.total_amount - Debt.amount_paid), 0)
+    ).scalar()
+
+    total_debtors = _debt_q().filter(Debt.status != 'paid').with_entities(
+        func.count(Debt.id)
+    ).scalar()
 
     debt_collected_today = db.session.query(
         func.coalesce(func.sum(DebtPayment.amount), 0)
-    ).filter(DebtPayment.payment_date == today).scalar()
+    ).join(Debt).filter(
+        DebtPayment.payment_date == today,
+        *([Debt.seller_id == user.id] if user.is_seller
+          else [Debt.shop_id.in_(user.get_shop_ids())] if not user.is_super_admin
+          else [])
+    ).scalar()
 
     # Stock
     prod_query = Product.query.filter_by(is_active=True)

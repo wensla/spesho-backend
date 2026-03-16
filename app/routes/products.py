@@ -93,6 +93,12 @@ def create_product():
     if existing and not existing.is_active:
         existing.unit_price = unit_price
         existing.is_active = True
+        if data.get('buying_price') is not None:
+            try:
+                bp = float(data['buying_price'])
+                existing.buying_price = bp if bp >= 0 else None
+            except (TypeError, ValueError):
+                pass
         package_size = data.get('package_size', 5)
         if package_size in (5, 10, 25):
             existing.package_size = package_size
@@ -106,7 +112,17 @@ def create_product():
         package_size = data.get('package_size', 5)
         if package_size not in (5, 10, 25):
             package_size = 5
-    product = Product(shop_id=shop_id, name=name, unit_price=unit_price, unit=unit,
+    buying_price = None
+    if data.get('buying_price') is not None:
+        try:
+            buying_price = float(data['buying_price'])
+            if buying_price < 0:
+                buying_price = None
+        except (TypeError, ValueError):
+            pass
+
+    product = Product(shop_id=shop_id, name=name, unit_price=unit_price,
+                      buying_price=buying_price, unit=unit,
                       package_size=package_size, category=category)
     db.session.add(product)
     db.session.commit()
@@ -150,6 +166,12 @@ def update_product(product_id):
             product.category = category
             if category in ('mchele', 'maharage'):
                 product.package_size = 1
+    if 'buying_price' in data:
+        try:
+            bp = float(data['buying_price'])
+            product.buying_price = bp if bp >= 0 else None
+        except (TypeError, ValueError):
+            pass
     if 'package_size' in data and product.category == 'unga':
         package_size = data.get('package_size')
         if package_size in (5, 10, 25):

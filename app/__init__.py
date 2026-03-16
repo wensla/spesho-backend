@@ -95,6 +95,9 @@ def _run_migrations():
     # ── products ──────────────────────────────────────────────────────────────
     cols = [c['name'] for c in inspector.get_columns('products')]
     with db.engine.connect() as conn:
+        if 'buying_price' not in cols:
+            conn.execute(text('ALTER TABLE products ADD COLUMN buying_price NUMERIC(12,2)'))
+            conn.commit()
         if 'package_size' not in cols:
             conn.execute(text('ALTER TABLE products ADD COLUMN package_size INTEGER NOT NULL DEFAULT 5'))
             conn.commit()
@@ -133,6 +136,20 @@ def _run_migrations():
         with db.engine.connect() as conn:
             if 'shop_id' not in sm_cols:
                 conn.execute(text('ALTER TABLE stock_movements ADD COLUMN shop_id INTEGER REFERENCES shops(id)'))
+                conn.commit()
+            if 'reason' not in sm_cols:
+                conn.execute(text('ALTER TABLE stock_movements ADD COLUMN reason VARCHAR(100)'))
+                conn.commit()
+
+    # ── debts: add shop_id and seller_id ─────────────────────────────────────
+    if 'debts' in inspector.get_table_names():
+        d_cols = [c['name'] for c in inspector.get_columns('debts')]
+        with db.engine.connect() as conn:
+            if 'shop_id' not in d_cols:
+                conn.execute(text('ALTER TABLE debts ADD COLUMN shop_id INTEGER REFERENCES shops(id)'))
+                conn.commit()
+            if 'seller_id' not in d_cols:
+                conn.execute(text('ALTER TABLE debts ADD COLUMN seller_id INTEGER REFERENCES users(id)'))
                 conn.commit()
 
     # ── users: add manager_id for seller→manager tracking ────────────────────

@@ -3,20 +3,55 @@ from datetime import date, timedelta, datetime
 from sqlalchemy import func, extract
 from app import db
 from app.models.debt import Debt, DebtPayment
-from app.middleware.auth import manager_required
+from app.middleware.auth import login_required, manager_required, get_current_user
 
 debts_bp = Blueprint('debts', __name__)
 
 
+def _debt_filter(query, user, shop_id=None):
+    """Scope debt queries to what the current user can see."""
+    if user.is_super_admin:
+        if shop_id:
+            return query.filter(Debt.shop_id == shop_id)
+        return query
+    if user.is_seller:
+        return query.filter(Debt.seller_id == user.id)
+    # Manager — see debts for their shops
+    accessible = user.get_shop_ids()
+    if shop_id and shop_id in accessible:
+        return query.filter(Debt.shop_id == shop_id)
+    if accessible:
+        return query.filter(Debt.shop_id.in_(accessible))
+    return query.filter(Debt.id == -1)  # no shops → empty
+
+
+def _payment_filter(query, user, shop_id=None):
+    """Scope DebtPayment queries via debt's shop_id."""
+    if user.is_super_admin:
+        if shop_id:
+            return query.join(Debt).filter(Debt.shop_id == shop_id)
+        return query
+    if user.is_seller:
+        return query.join(Debt).filter(Debt.seller_id == user.id)
+    accessible = user.get_shop_ids()
+    if shop_id and shop_id in accessible:
+        return query.join(Debt).filter(Debt.shop_id == shop_id)
+    if accessible:
+        return query.join(Debt).filter(Debt.shop_id.in_(accessible))
+    return query.filter(DebtPayment.id == -1)
+
+
 # ── List debts ────────────────────────────────────────────────────────────────
 @debts_bp.route('/', methods=['GET'])
-@manager_required
+@login_required
 def list_debts():
+    user     = get_current_user()
+    shop_id  = request.args.get('shop_id', type=int)
     status   = request.args.get('status')
     customer = request.args.get('customer')
-    q = Debt.query
+    q = _debt_filter(Debt.query, user, shop_id)
     if status:
-        q = q.filter_by(status=status)
+        q = q.filter(Debt.status == status)
     if customer:
         q = q.filter(Debt.customer_name.ilike(f'%{customer}%'))
     debts = q.order_by(Debt.date.desc()).all()
@@ -25,18 +60,24 @@ def list_debts():
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 @debts_bp.route('/summary', methods=['GET'])
-@manager_required
+@login_required
 def summary():
-    total   = Debt.query.count()
-    pending = Debt.query.filter_by(status='pending').count()
-    partial = Debt.query.filter_by(status='partial').count()
-    paid    = Debt.query.filter_by(status='paid').count()
+    user    = get_current_user()
+    shop_id = request.args.get('shop_id', type=int)
 
-    total_amount  = db.session.query(func.coalesce(func.sum(Debt.total_amount), 0)).scalar()
-    total_paid_v  = db.session.query(func.coalesce(func.sum(Debt.amount_paid),  0)).scalar()
-    total_balance = db.session.query(
+    def dq():
+        return _debt_filter(db.session.query(Debt), user, shop_id)
+
+    total   = dq().count()
+    pending = dq().filter(Debt.status == 'pending').count()
+    partial = dq().filter(Debt.status == 'partial').count()
+    paid    = dq().filter(Debt.status == 'paid').count()
+
+    total_amount  = dq().with_entities(func.coalesce(func.sum(Debt.total_amount), 0)).scalar()
+    total_paid_v  = dq().with_entities(func.coalesce(func.sum(Debt.amount_paid), 0)).scalar()
+    total_balance = dq().filter(Debt.status != 'paid').with_entities(
         func.coalesce(func.sum(Debt.total_amount - Debt.amount_paid), 0)
-    ).filter(Debt.status != 'paid').scalar()
+    ).scalar()
 
     return jsonify({
         'total_debts':   total,
@@ -51,20 +92,25 @@ def summary():
 
 # ── Reports ───────────────────────────────────────────────────────────────────
 @debts_bp.route('/reports', methods=['GET'])
-@manager_required
+@login_required
 def reports():
-    today = date.today()
+    user    = get_current_user()
+    shop_id = request.args.get('shop_id', type=int)
+    today   = date.today()
+
+    def dq():
+        return _debt_filter(db.session.query(Debt), user, shop_id)
 
     # Daily — last 30 days
     thirty_ago = today - timedelta(days=30)
-    daily_rows = db.session.query(
+    daily_rows = dq().filter(Debt.date >= thirty_ago).with_entities(
         Debt.date,
         func.count(Debt.id).label('count'),
         func.coalesce(func.sum(Debt.total_amount), 0).label('total_amount'),
-    ).filter(Debt.date >= thirty_ago).group_by(Debt.date).order_by(Debt.date).all()
+    ).group_by(Debt.date).order_by(Debt.date).all()
 
     # Monthly — all time grouped by year+month
-    monthly_rows = db.session.query(
+    monthly_rows = dq().with_entities(
         extract('year',  Debt.date).label('year'),
         extract('month', Debt.date).label('month'),
         func.count(Debt.id).label('count'),
@@ -72,25 +118,24 @@ def reports():
     ).group_by('year', 'month').order_by('year', 'month').all()
 
     # Yearly
-    yearly_rows = db.session.query(
+    yearly_rows = dq().with_entities(
         extract('year', Debt.date).label('year'),
         func.count(Debt.id).label('count'),
         func.coalesce(func.sum(Debt.total_amount), 0).label('total_amount'),
     ).group_by('year').order_by('year').all()
 
     # Chronic debtors — outstanding ≥ 30 days, not paid
-    chronic = Debt.query.filter(
+    chronic = dq().filter(
         Debt.status != 'paid',
         Debt.date <= today - timedelta(days=30)
     ).order_by(Debt.date.asc()).all()
 
     # Today's summary
-    today_new       = Debt.query.filter(Debt.date == today).count()
-    today_collected = db.session.query(
+    today_new       = dq().filter(Debt.date == today).count()
+    today_collected = _payment_filter(db.session.query(DebtPayment), user, shop_id).with_entities(
         func.coalesce(func.sum(DebtPayment.amount), 0)
     ).filter(DebtPayment.payment_date == today).scalar()
 
-    import calendar
     month_names = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -117,9 +162,10 @@ def reports():
 
 # ── Single debt ───────────────────────────────────────────────────────────────
 @debts_bp.route('/<int:debt_id>', methods=['GET'])
-@manager_required
+@login_required
 def get_debt(debt_id):
-    debt = Debt.query.get_or_404(debt_id)
+    user = get_current_user()
+    debt = _debt_filter(Debt.query, user).filter_by(id=debt_id).first_or_404()
     payments = DebtPayment.query.filter_by(debt_id=debt_id)\
         .order_by(DebtPayment.payment_date.desc()).all()
     return jsonify({
@@ -130,8 +176,9 @@ def get_debt(debt_id):
 
 # ── Create debt ───────────────────────────────────────────────────────────────
 @debts_bp.route('/', methods=['POST'])
-@manager_required
+@login_required
 def create_debt():
+    user = get_current_user()
     data = request.get_json()
     customer_name = (data.get('customer_name') or '').strip()
     if not customer_name:
@@ -149,7 +196,15 @@ def create_debt():
     if data.get('date'):
         debt_date = datetime.strptime(data['date'], '%Y-%m-%d').date()
 
+    # Resolve shop_id: use provided or first accessible shop
+    shop_id = data.get('shop_id')
+    if not shop_id:
+        ids = user.get_shop_ids()
+        shop_id = ids[0] if ids else None
+
     debt = Debt(
+        shop_id        = shop_id,
+        seller_id      = user.id,
         customer_name  = customer_name,
         customer_phone = data.get('customer_phone'),
         product_id     = data.get('product_id'),
@@ -168,8 +223,9 @@ def create_debt():
 
 # ── Create debt from sale ─────────────────────────────────────────────────────
 @debts_bp.route('/from-sale', methods=['POST'])
-@manager_required
+@login_required
 def create_debt_from_sale():
+    user          = get_current_user()
     data          = request.get_json()
     customer_name = (data.get('customer_name') or '').strip()
     if not customer_name:
@@ -187,7 +243,14 @@ def create_debt_from_sale():
     if data.get('date'):
         debt_date = datetime.strptime(data['date'], '%Y-%m-%d').date()
 
+    shop_id = data.get('shop_id')
+    if not shop_id:
+        ids = user.get_shop_ids()
+        shop_id = ids[0] if ids else None
+
     debt = Debt(
+        shop_id        = shop_id,
+        seller_id      = user.id,
         customer_name  = customer_name,
         customer_phone = data.get('customer_phone'),
         total_amount   = total_amount,
@@ -203,9 +266,10 @@ def create_debt_from_sale():
 
 # ── Record payment ────────────────────────────────────────────────────────────
 @debts_bp.route('/<int:debt_id>/payments', methods=['POST'])
-@manager_required
+@login_required
 def record_payment(debt_id):
-    debt   = Debt.query.get_or_404(debt_id)
+    user   = get_current_user()
+    debt   = _debt_filter(Debt.query, user).filter_by(id=debt_id).first_or_404()
     data   = request.get_json()
     amount = float(data.get('amount', 0))
     if amount <= 0:

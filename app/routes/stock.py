@@ -61,6 +61,63 @@ def stock_in():
     }), 201
 
 
+@stock_bp.route('/adjust', methods=['POST'])
+@manager_required
+def stock_adjust():
+    """Set absolute stock level for a product in a shop.
+    Calculates the delta and records a positive/negative adjustment movement."""
+    user = get_current_user()
+    data = request.get_json()
+
+    for field in ('product_id', 'new_quantity'):
+        if data.get(field) is None:
+            return jsonify({'error': f'{field} is required'}), 400
+
+    product = Product.query.get(data['product_id'])
+    if not product or not product.is_active:
+        return jsonify({'error': 'Product not found'}), 404
+
+    new_qty = float(data['new_quantity'])
+    if new_qty < 0:
+        return jsonify({'error': 'new_quantity cannot be negative'}), 400
+
+    shop_ids = user.get_shop_ids()
+    shop_id  = data.get('shop_id')
+    if not user.is_super_admin:
+        if not shop_ids:
+            return jsonify({'error': 'You are not assigned to any shop'}), 403
+        shop_id = shop_id if shop_id in shop_ids else shop_ids[0]
+
+    current = product.current_stock(shop_id=shop_id)
+    delta   = new_qty - current
+
+    if delta == 0:
+        return jsonify({'message': 'No change needed', 'current_stock': current}), 200
+
+    movement = StockMovement(
+        shop_id       = shop_id,
+        product_id    = data['product_id'],
+        quantity_in   = max(delta, 0),
+        quantity_out  = max(-delta, 0),
+        unit_price    = float(product.unit_price),
+        note          = data.get('note', ''),
+        movement_type = 'adjustment',
+        reason        = (data.get('reason') or '').strip() or 'Manual adjustment',
+        created_by    = user.id,
+        date          = date.today(),
+    )
+    db.session.add(movement)
+    db.session.commit()
+
+    return jsonify({
+        'message':     'Stock adjusted',
+        'previous':    current,
+        'new_balance': product.current_stock(shop_id=shop_id),
+        'delta':       delta,
+        'movement':    movement.to_dict(),
+    }), 201
+
+
 @stock_bp.route('/balance', methods=['GET'])
 @login_required
 def stock_balance():

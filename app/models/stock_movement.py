@@ -12,7 +12,8 @@ class StockMovement(db.Model):
     quantity_out = db.Column(db.Numeric(12, 2), default=0)
     unit_price = db.Column(db.Numeric(12, 2), nullable=True)
     note = db.Column(db.String(255), nullable=True)
-    movement_type = db.Column(db.String(10), nullable=False)  # 'in' | 'out'
+    movement_type = db.Column(db.String(15), nullable=False)  # 'in' | 'out' | 'adjustment'
+    reason        = db.Column(db.String(100), nullable=True)  # for adjustments
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
     date = db.Column(db.Date, default=datetime.utcnow, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -31,6 +32,7 @@ class StockMovement(db.Model):
             'unit_price': float(self.unit_price) if self.unit_price else None,
             'note': self.note,
             'movement_type': self.movement_type,
+            'reason': self.reason,
             'created_by': self.created_by,
             'date': self.date.isoformat() if self.date else None,
             'created_at': self.created_at.isoformat(),

@@ -2,7 +2,25 @@ from app import db
 from datetime import datetime
 
 # Payment method choices
-PAYMENT_METHODS = ('cash', 'mobile_money', 'bank_transfer', 'credit')
+PAYMENT_METHODS = (
+    'cash',
+    'mpesa',          # M-Pesa
+    'tigopesa',       # Tigo Pesa
+    'airtel_money',   # Airtel Money
+    'mobile_money',   # legacy / generic fallback
+    'bank_transfer',
+    'credit',
+)
+
+PAYMENT_LABELS = {
+    'cash':          'Cash',
+    'mpesa':         'M-Pesa',
+    'tigopesa':      'Tigo Pesa',
+    'airtel_money':  'Airtel Money',
+    'mobile_money':  'Mobile Money',
+    'bank_transfer': 'Bank Transfer',
+    'credit':        'Credit',
+}
 
 
 class DailySale(db.Model):
@@ -34,6 +52,7 @@ class DailySale(db.Model):
             'cash_paid': float(self.cash_paid),
             'debt': float(self.debt),
             'payment_method': self.payment_method or 'cash',
+            'payment_label': PAYMENT_LABELS.get(self.payment_method or 'cash', self.payment_method or 'Cash'),
             'note': self.note,
             'customer_name': self.customer_name,
             'customer_phone': self.customer_phone,

@@ -8,7 +8,8 @@ class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     shop_id = db.Column(db.Integer, db.ForeignKey('shops.id'), nullable=True, index=True)
     name = db.Column(db.String(120), nullable=False, index=True)
-    unit_price = db.Column(db.Numeric(12, 2), nullable=False)
+    unit_price   = db.Column(db.Numeric(12, 2), nullable=False)
+    buying_price = db.Column(db.Numeric(12, 2), nullable=True)  # cost price for COGS/profit
     unit = db.Column(db.String(20), nullable=False, default='kg')
     package_size = db.Column(db.Integer, nullable=False, default=5)
     category = db.Column(db.String(20), nullable=False, default='unga')
@@ -37,7 +38,8 @@ class Product(db.Model):
             'id': self.id,
             'shop_id': self.shop_id,
             'name': self.name,
-            'unit_price': float(self.unit_price),
+            'unit_price':   float(self.unit_price),
+            'buying_price': float(self.buying_price) if self.buying_price else None,
             'unit': self.unit,
             'package_size': self.package_size,
             'category': self.category,

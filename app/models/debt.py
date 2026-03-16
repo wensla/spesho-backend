@@ -6,6 +6,8 @@ class Debt(db.Model):
     __tablename__ = 'debts'
 
     id            = db.Column(db.Integer, primary_key=True)
+    shop_id       = db.Column(db.Integer, db.ForeignKey('shops.id'), nullable=True, index=True)
+    seller_id     = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True, index=True)
     customer_name = db.Column(db.String(100), nullable=False)
     customer_phone= db.Column(db.String(20),  nullable=True)
     product_id    = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=True, index=True)
@@ -18,6 +20,7 @@ class Debt(db.Model):
     status        = db.Column(db.String(10), default='pending', nullable=False, index=True)
     created_at    = db.Column(db.DateTime, default=datetime.utcnow)
 
+    shop     = db.relationship('Shop', foreign_keys=[shop_id])
     product  = db.relationship('Product', backref='debts', lazy='joined')
     payments = db.relationship('DebtPayment', backref='debt', lazy='dynamic',
                                cascade='all, delete-orphan')
@@ -35,6 +38,9 @@ class Debt(db.Model):
     def to_dict(self):
         return {
             'id':              self.id,
+            'shop_id':         self.shop_id,
+            'shop_name':       self.shop.name if self.shop else None,
+            'seller_id':       self.seller_id,
             'customer_name':   self.customer_name,
             'customer_phone':  self.customer_phone,
             'product_id':      self.product_id,
