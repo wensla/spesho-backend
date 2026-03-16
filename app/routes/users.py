@@ -18,21 +18,14 @@ def list_users():
         # Super admin sees managers only
         users = User.query.filter_by(role='manager').order_by(User.full_name).all()
     else:
-        # Manager sees only sellers assigned to their shops
-        from app.models.user import _user_shops
-        manager_shop_ids = current.get_shop_ids()
-        if manager_shop_ids:
-            users = (
-                User.query
-                .filter(User.role.in_(['seller', 'salesperson']))
-                .join(_user_shops, User.id == _user_shops.c.user_id)
-                .filter(_user_shops.c.shop_id.in_(manager_shop_ids))
-                .distinct()
-                .order_by(User.full_name)
-                .all()
-            )
-        else:
-            users = []
+        # Manager sees all sellers they created (via manager_id)
+        users = (
+            User.query
+            .filter(User.role.in_(['seller', 'salesperson']))
+            .filter_by(manager_id=current.id)
+            .order_by(User.full_name)
+            .all()
+        )
     return jsonify({'users': [u.to_dict() for u in users]}), 200
 
 
@@ -75,6 +68,7 @@ def create_user():
         role=role,
         full_name=data.get('full_name', ''),
         gender=gender,
+        manager_id=current.id if current.is_manager and role == 'seller' else None,
     )
     user.set_password(password)
     db.session.add(user)

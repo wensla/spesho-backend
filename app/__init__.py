@@ -135,6 +135,13 @@ def _run_migrations():
                 conn.execute(text('ALTER TABLE stock_movements ADD COLUMN shop_id INTEGER REFERENCES shops(id)'))
                 conn.commit()
 
+    # ── users: add manager_id for seller→manager tracking ────────────────────
+    u_cols2 = [c['name'] for c in inspector.get_columns('users')]
+    with db.engine.connect() as conn:
+        if 'manager_id' not in u_cols2:
+            conn.execute(text('ALTER TABLE users ADD COLUMN manager_id INTEGER REFERENCES users(id)'))
+            conn.commit()
+
     # ── users: normalise legacy 'salesperson' role ────────────────────────────
     # Drop old check constraint (if any) before updating the role value
     with db.engine.connect() as conn:
