@@ -15,8 +15,13 @@ _VALID_ROLES = ('super_admin', 'manager', 'seller', 'salesperson')
 def list_users():
     current = get_current_user()
     if current.is_super_admin:
-        # Super admin sees managers only
-        users = User.query.filter_by(role='manager').order_by(User.full_name).all()
+        # Super admin sees ALL users ordered by role priority
+        role_order = db.case(
+            (User.role == 'super_admin', 0),
+            (User.role == 'manager', 1),
+            else_=2
+        )
+        users = User.query.order_by(role_order, User.full_name).all()
     else:
         # Manager sees only sellers assigned to their shops
         from app.models.user import _user_shops
@@ -127,10 +132,30 @@ def update_user(user_id):
 @users_bp.route('/<int:user_id>', methods=['DELETE'])
 @manager_required
 def delete_user(user_id):
+    current = get_current_user()
+    current_id = int(get_jwt_identity())
+    if current_id == user_id:
+        return jsonify({'error': 'Cannot delete yourself'}), 400
+    user = User.query.get_or_404(user_id)
+    # Super admin can hard-delete any user
+    if current.is_super_admin:
+        db.session.delete(user)
+        db.session.commit()
+        return jsonify({'message': 'User deleted'}), 200
+    # Manager can only deactivate sellers in their shops
+    user.is_active = False
+    db.session.commit()
+    return jsonify({'message': 'User deactivated'}), 200
+
+
+@users_bp.route('/<int:user_id>/toggle-active', methods=['POST'])
+@super_admin_required
+def toggle_active(user_id):
     current_id = int(get_jwt_identity())
     if current_id == user_id:
         return jsonify({'error': 'Cannot deactivate yourself'}), 400
     user = User.query.get_or_404(user_id)
-    user.is_active = False
+    user.is_active = not user.is_active
     db.session.commit()
-    return jsonify({'message': 'User deactivated'}), 200
+    status = 'activated' if user.is_active else 'deactivated'
+    return jsonify({'message': f'User {status}', 'user': user.to_dict()}), 200
