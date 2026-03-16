@@ -109,22 +109,28 @@ def update_user(user_id):
 
 
 # ── POST /api/users/<id>/toggle-active ───────────────────────────────────────
-# SRS 3.1: Super Admin Activate/Deactivate Accounts
+# Super Admin: toggle manager active state
+# Manager: toggle their seller active state
 @users_bp.route('/<int:user_id>/toggle-active', methods=['POST'])
-@super_admin_required
+@manager_required
 def toggle_active(user_id):
+    current = get_current_user()
     current_id = int(get_jwt_identity())
     if current_id == user_id:
         return jsonify({'error': 'Cannot deactivate yourself'}), 400
     user = User.query.get_or_404(user_id)
+    # Manager can only toggle their own sellers
+    if current.is_manager and user.manager_id != current.id:
+        return jsonify({'error': 'Not your seller'}), 403
     user.is_active = not user.is_active
     db.session.commit()
     status = 'activated' if user.is_active else 'deactivated'
-    return jsonify({'message': f'Manager {status}', 'user': user.to_dict()}), 200
+    return jsonify({'message': f'User {status}', 'user': user.to_dict()}), 200
 
 
 # ── DELETE /api/users/<id> ────────────────────────────────────────────────────
-# SRS: Manager removes their Sellers
+# Super Admin: delete any manager
+# Manager: delete their own sellers
 @users_bp.route('/<int:user_id>', methods=['DELETE'])
 @manager_required
 def delete_user(user_id):
@@ -133,11 +139,8 @@ def delete_user(user_id):
     if current_id == user_id:
         return jsonify({'error': 'Cannot delete yourself'}), 400
     user = User.query.get_or_404(user_id)
-    # Only manager can delete their own sellers
-    if current.is_manager:
-        if user.manager_id != current.id:
-            return jsonify({'error': 'Not your seller'}), 403
-        db.session.delete(user)
-        db.session.commit()
-        return jsonify({'message': 'Seller removed'}), 200
-    return jsonify({'error': 'Use toggle-active to deactivate managers'}), 403
+    if current.is_manager and user.manager_id != current.id:
+        return jsonify({'error': 'Not your seller'}), 403
+    db.session.delete(user)
+    db.session.commit()
+    return jsonify({'message': 'User deleted'}), 200
